@@ -1,23 +1,19 @@
 import struct
 import parsley
 
-from unittest import TestCase
+from twisted.trial.unittest import TestCase
 
 from txsocksx.parser import SOCKSGrammar
 
-# From https://gist.github.com/1595135
-def IPV4StrToInt(s):
-    """
-    Returns the 32 bits representing an IP address from a string.
-    """
-    return reduce(lambda a,b: a<<8 | b, map(int, s.split(".")))
+from txsocksx import errors as e
 
-dummyDomain = 'example.com'
+dummyDomain = 'fuffa.org'
 dummyIPV4Addr = '127.0.0.1'
-dummyIPV4AddrBytes = struct.pack('!i', IPV4StrToInt(dummyIPV4Addr))
+dummyIPV4AddrBytes = \
+        struct.pack('!BBBB', *[int(q) for q in dummyIPV4Addr.split('.')])
 
-dummyPort = 1080
-dummyPortBytes = struct.pack('l', dummyPort)
+# 80
+dummyPort = '\x00\x50'
 
 dummyClientVersionMethodMessageNoAuthV5 = \
     '\x05\x01\x00'
@@ -26,34 +22,117 @@ dummyServerVersionMethodMessageNoAuthV5 = \
     '\x05\x00'
 
 dummySOCKSAddrIPV4 = '\x01' + dummyIPV4AddrBytes
-dummySOCKSAddrDomain = '\x04' + '\x08' + dummyDomain
+dummySOCKSAddrDomain = '\x04' + chr(len(dummyDomain)) + dummyDomain
 
-dummyClientRequestMessageConnectDomainV5 = \
-        '\x05\x01\x00' + dummySOCKSAddrDomain
+dummyClientConnectDomain = \
+        '\x05\x01\x00' + dummySOCKSAddrDomain + dummyPort
 
-dummyServerReplyMessageSuccessIPV4 = \
-        '\x05\x00\x00' + '\x03' + dummyIPV4AddrBytes + dummyPortBytes
+dummyClientConnectIPV4 = \
+        '\x05\x01\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplySuccessIPV4 = \
+        '\x05\x00\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+
+dummyServerReplyFail1IPV4 = \
+        '\x05\x01\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplyFail2IPV4 = \
+        '\x05\x02\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplyFail3IPV4 = \
+        '\x05\x03\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplyFail4IPV4 = \
+        '\x05\x04\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplyFail5IPV4 = \
+        '\x05\x05\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplyFail6IPV4 = \
+        '\x05\x06\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplyFail7IPV4 = \
+        '\x05\x07\x00' + dummySOCKSAddrIPV4 + dummyPort
+
+dummyServerReplyFail8IPV4 = \
+        '\x05\x08\x00' + dummySOCKSAddrIPV4 + dummyPort
 
 
 class TestSOCKSParser(TestCase):
-    def test_parse_socks_domain(self):
+    def test_SOCKSAddrDomain(self):
         p = SOCKSGrammar(dummySOCKSAddrDomain)
         self.assertEqual(p.SOCKSAddress(),
-                'example.com')
+                dummyDomain)
 
-    def test_parse_socks_ipv4(self):
+    def test_SOCKSAddrIPV4(self):
         p = SOCKSGrammar(dummySOCKSAddrIPV4)
         self.assertEqual(p.SOCKSAddress(),
                 '127.0.0.1')
 
-    def test_parse_client_connect_request_message(self):
-        p = SOCKSGrammar(dummyClientRequestMessageConnectDomainV5)
-        self.assertEqual(p.clientRequestMessage(),
-                    ('Connect', dummyIPV4Addr, dummyPort))
+    def test_ClientConnectDomain(self):
+        p = SOCKSGrammar(
+                dummyClientConnectDomain
+        )
+        self.assertEqual(p.clientRequest(),
+                    (1, dummyDomain, 80))
 
-    def test_parse_client_request_message(self):
-        p = SOCKSGrammar(dummyServerReplyMessageSuccessIPV4)
-        self.assertEqual(p.clientRequestMessage(),
-                ('Success', dummyIPV4Addr, dummyPort))
+    def test_ClientConnectIPV4(self):
+        p = SOCKSGrammar(
+                dummyClientConnectIPV4
+        )
+        self.assertEqual(p.clientRequest(),
+                    (1, dummyIPV4Addr, 80))
 
+    def test_ServerReplySuccess(self):
+        p = SOCKSGrammar(dummyServerReplySuccessIPV4)
+        self.assertEqual(p.serverReply(),
+                (0, dummyIPV4Addr, 80))
+
+    def test_ServerReplyServerFailure(self):
+        p = SOCKSGrammar(dummyServerReplyFail1IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.ServerFailure)
+
+
+    def test_ServerReplyConnectionNotAllowed(self):
+        p = SOCKSGrammar(dummyServerReplyFail2IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.ConnectionNotAllowed)
+
+
+    def test_ServerReplyNetworkUnreachable(self):
+        p = SOCKSGrammar(dummyServerReplyFail3IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.NetworkUnreachable)
+
+
+    def test_ServerReplyHostUnreachable(self):
+        p = SOCKSGrammar(dummyServerReplyFail4IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.HostUnreachable)
+
+
+    def test_ServerReplyConnectionRefused(self):
+        p = SOCKSGrammar(dummyServerReplyFail5IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.ConnectionRefused)
+
+
+    def test_ServerReplyTTLExpired(self):
+        p = SOCKSGrammar(dummyServerReplyFail6IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.TTLExpired)
+
+
+    def test_ServerReplyCommandNotSupported(self):
+        p = SOCKSGrammar(dummyServerReplyFail7IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.CommandNotSupported)
+
+
+    def test_ServerReplyAddressNotSupported(self):
+        p = SOCKSGrammar(dummyServerReplyFail8IPV4)
+        failure, addr, port  = p.serverReply()
+        self.assertIs(failure, e.AddressNotSupported)
 

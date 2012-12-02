@@ -1,24 +1,26 @@
 import parsley
 import struct
 
-socks_grammar = """
-# XXX Is this correct?
-octet = anything
+from txsocksx import errors, auth
 
-byteToInt = octet:b
-    -> ord(b)
+socks_grammar = r"""
+# XXX probably move these to another grammar and inherit from it
+byte = anything:byte -> ord(byte)
+short = byte:high byte:low -> (high << 8) | low
 
-byteToIntStr = octet:b
+byteToIntStr = anything:b
     -> str(ord(b))
 
-ver = '\x05' | '\x04'
+# IPV4, IPV6 Address in binary form
+IPV4AddrBytes = byte{4}:quads
+    -> '.'.join(str(q) for q in quads)
+# XXX properly parse IPV6
+IPV6AddrBytes = <byte{16}>
 
-rsv = '\x00'
-
-IPV4Addr = anything{4}:quads
-    -> '.'.join(str(ord(q)) for q in quads)
-
-IPV6Addr = <anything{16}>
+# IPV6 Address in the form 'X:X:X::X::X'
+# IPV4 Address in the form '0.0.0.0'
+IPV4AddrStr = <(digit{1, 3} '.'){4}>
+IPV6AddrStr = <(hexdigit{0, 4} ':'){7} hexdigit{1, 4}>
 
 # XXX notes
 # letterOrDigitOrHyphen = letterOrDigit | '-'
@@ -27,56 +29,74 @@ IPV6Addr = <anything{16}>
 #    < (domainLabel '.'?)* >
 
 # XXX make this stricter
-SOCKSDomainName =
-    byteToInt:len <anything*>
+DomainName =
+    byte:len <anything{len}>
 
-SOCKSAddress = (token('\x01') IPV4Addr:addr
-                    -> addr
+# Below are SOCKS specific messages
+ver = ('\x05' -> 5)
+      | ('\x04' -> 4)
 
-                | token('\x03') IPV6Addr:addr
-                    -> addr
+rsv = <'\x00'>
 
-                | token('\x04') SOCKSDomainName:domain
-                    -> domain
-                )
+SOCKSAddress = ('\x01' IPV4AddrBytes:addr
+                    -> addr)
 
-port = anything{2}
+                | ('\x03' IPV6AddrBytes:addr
+                    -> addr)
+
+                | ('\x04' DomainName:domain
+                    -> domain)
+
+hostToSOCKSAddress =
+                ( IPV4AddrBytes:addr
+                    -> '\x01' + addr )
+
+                | ( IPV6AddrBytes:addr
+                    -> '\x03' + addr )
+
+                | ( DomainName:addr
+                    -> '\x04' + addr )
+
+port = short:p -> int(p)
 
 # The Client version identified/method selection message
-clientVersionMethodMessage =
-    ver octet:nmethods octet{1, 255}:methods
-    -> (ver, nmethods, methods)
+clientVersionMethod =
+    ver:v anything:nmethods anything{1, 255}:methods
+    -> (v, nmethods, methods)
 
-methods = tokenize('\x00') -> 'No Authentication Required'
-          | tokenize('\x01') -> 'GSSAPI'
-          | tokenize('\x02') -> 'Username/Password'
-          | tokenize('\xFF') -> 'No Acceptable Methods'
+methods = ('\x00' -> a.Anonymous)
+          | ('\x01' -> a.GSSAPI)
+          | ('\x02' -> a.UsernamePassword)
+          | ('\xFF' -> e.NoAcceptableMethods)
 
 # The Server version identified/method selection message
-serverVersionMethodMessage =
-    ver methods -> (ver, method)
+serverVersionMethod =
+    ver:v methods:m -> (v, m)
 
-cmd = token('\x01') -> 'Connect'
-      | token('\x02') -> 'Bind'
-      | token('\x03') -> 'UDP Associate'
+cmd = ('\x01' -> 1)
+      | ('\x02' -> 2)
+      | ('\x03' -> 3)
 
-clientRequestMessage =
-    ver cmd rsv SOCKSAddress port
+clientRequest =
+    ver cmd:command byte SOCKSAddress:address port:port
+        -> (command, address, port)
 
-rep = token('\x00') -> 'Suceeded'
-      | token('\x01') -> 'General SOCKS server failure'
-      | token('\x02') -> 'Connection not allowed'
-      | token('\x03') -> 'Network unreachable'
-      | token('\x04') -> 'Host unreachable'
-      | token('\x05') -> 'Connection refused'
-      | token('\x06') -> 'TTL expired'
-      | token('\x07') -> 'Command not supported'
-      | token('\x08') -> 'Address type not supported'
+rep = ('\x00' -> 0)
+      | ('\x01' -> e.ServerFailure)
+      | ('\x02' -> e.ConnectionNotAllowed)
+      | ('\x03' -> e.NetworkUnreachable)
+      | ('\x04' -> e.HostUnreachable)
+      | ('\x05' -> e.ConnectionRefused)
+      | ('\x06' -> e.TTLExpired)
+      | ('\x07' -> e.CommandNotSupported)
+      | ('\x08' -> e.AddressNotSupported)
 
-serverReplyMessage =
-    ver rep:reply rsv SOCKSAddress:address port:port
+serverReply =
+    ver rep:reply byte SOCKSAddress:address port:port
     -> (reply, address, port)
 """
 
-SOCKSGrammar = parsley.makeGrammar(socks_grammar, {})
+SOCKSGrammar = parsley.makeGrammar(socks_grammar,
+        {"e": errors, "a": auth}
+)
 
