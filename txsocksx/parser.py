@@ -7,6 +7,7 @@ socks_grammar = r"""
 # XXX probably move these to another grammar and inherit from it
 byte = anything:byte -> ord(byte)
 short = byte:high byte:low -> (high << 8) | low
+hexdigit = :x ?(x in '0123456789abcdefABCDEF') -> x
 
 byteToIntStr = anything:b
     -> str(ord(b))
@@ -29,8 +30,10 @@ IPV6AddrStr = <(hexdigit{0, 4} ':'){7} hexdigit{1, 4}>
 #    < (domainLabel '.'?)* >
 
 # XXX make this stricter
-DomainName =
-    byte:len <anything{len}>
+DomainName = letterOrDigit | '-' | '.'
+
+SOCKSDomainName =
+    byte:len <DomainName{len}>
 
 # Below are SOCKS specific messages
 ver = ('\x05' -> 5)
@@ -41,21 +44,23 @@ rsv = <'\x00'>
 SOCKSAddress = ('\x01' IPV4AddrBytes:addr
                     -> addr)
 
-                | ('\x03' IPV6AddrBytes:addr
-                    -> addr)
-
-                | ('\x04' DomainName:domain
+                | ('\x03' SOCKSDomainName:domain
                     -> domain)
 
+                | ('\x04' IPV6AddrBytes:addr
+                    -> addr)
+
 hostToSOCKSAddress =
-                ( IPV4AddrBytes:addr
+                ( IPV4AddrStr:addr
                     -> '\x01' + addr )
 
-                | ( IPV6AddrBytes:addr
-                    -> '\x03' + addr )
+                | ( <DomainName*>:addr
+                    -> '\x03' + chr(len(addr)) + addr )
 
-                | ( DomainName:addr
+                | ( IPV6AddrStr:addr
                     -> '\x04' + addr )
+
+
 
 port = short:p -> int(p)
 
@@ -99,4 +104,9 @@ serverReply =
 SOCKSGrammar = parsley.makeGrammar(socks_grammar,
         {"e": errors, "a": auth}
 )
+
+# XXX how do I do the equivalent of the above and generate the grammar to a
+# file?
+#parsley.moduleFromGrammar(socks_grammar, 'SOCKSGrammar', 
+#        object, {"e": error, "a": auth})
 

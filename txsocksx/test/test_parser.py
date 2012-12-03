@@ -60,7 +60,7 @@ dummyServerReplyFail8IPV4 = \
 
 
 class TestSOCKSParser(TestCase):
-    def test_SOCKSAddrDomain(self):
+    def test_SOCKSAddressDomain(self):
         p = SOCKSGrammar(dummySOCKSAddrDomain)
         self.assertEqual(p.SOCKSAddress(),
                 dummyDomain)
@@ -70,12 +70,12 @@ class TestSOCKSParser(TestCase):
         self.assertEqual(p.SOCKSAddress(),
                 '127.0.0.1')
 
-    def test_ClientConnectDomain(self):
+    def test_hostToSOCKSAddress(self):
         p = SOCKSGrammar(
-                dummyClientConnectDomain
+                dummyDomain
         )
-        self.assertEqual(p.clientRequest(),
-                    (1, dummyDomain, 80))
+        self.assertEqual(p.hostToSOCKSAddress(),
+                    dummySOCKSAddrDomain)
 
     def test_ClientConnectIPV4(self):
         p = SOCKSGrammar(

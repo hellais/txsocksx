@@ -1,6 +1,9 @@
 from twisted.internet import error
 import txsocksx.constants as c
 
+class ParsingError(Exception):
+    pass
+
 class SOCKSError(Exception):
     pass
 

@@ -1,17 +1,20 @@
 import struct
 
-from qbuf.support.twisted import MultiBufferer, MODE_RAW
 from twisted.internet import protocol, defer, interfaces
 from twisted.python import failure
 from zope.interface import implements
 
-import txsocksx.constants as c, txsocksx.errors as e
+from txsocksx import constants as c
+import txsocksx.errors as e
+
 from txsocksx import auth
 
-def socks_host(host):
-    return chr(c.ATYP_DOMAINNAME) + chr(len(host)) + host
+from txsocksx.parser import SOCKSGrammar
 
-class Socks5ClientTransport(object):
+def shortToBytes(i):
+    return chr(i >> 8) + chr(i & 0xff)
+
+class SOCKS5ClientTransport(object):
     def __init__(self, wrappedClient):
         self.wrappedClient = wrappedClient
         self.transport = self.wrappedClient.transport
@@ -19,54 +22,74 @@ class Socks5ClientTransport(object):
     def __getattr__(self, attr):
         return getattr(self.transport, attr)
 
-class Socks5Client(MultiBufferer):
+class SOCKS5Client(protocol.Protocol):
     implements(interfaces.ITransport)
+
     otherProtocol = None
+    def __init__(self):
+        self._state = 'ServerVersionMethod'
 
     def connectionMade(self):
-        d = self.readReply()
-        @d.addErrback
-        def _eb(reason):
-            self.factory.proxyConnectionFailed(reason)
-            self.close()
-        return d
+        self.writeVersionMethod()
 
-    @defer.inlineCallbacks
-    def readReply(self):
-        methodMap = dict((m.method, m) for m in self.factory.authMethods)
+    def writeVersionMethod(self):
+        """
+        This creates:
+            ver octet:nmethods octet{1, 255}:methods
+        """
+        supported_methods = [m.method for m in self.factory.authMethods]
+
+        message = struct.pack('!BB', c.VER_SOCKS5,
+                    len(supported_methods))
+        message += ''.join(supported_methods)
+
+        self.transport.write(message)
+
+    def writeRequest(self, result, cmd=c.CMD_CONNECT):
+        """
+        This creates:
+            clientRequestMessage =
+                ver cmd rsv SOCKSAddress port
+        """
+        # XXX-Security audit makeGrammar
+        message = SOCKSGrammar(self.factory.host)
+        req = struct.pack('!BBB', c.VER_SOCKS5, cmd, 0)
         self.transport.write(
-            struct.pack('!BB', c.VER_SOCKS5, len(methodMap))
-            + ''.join(methodMap))
-        method, = yield self.unpack('!xc')
-        if method not in methodMap:
-            raise e.MethodsNotAcceptedError('no method proprosed was accepted',
-                                            methodMap.keys(), method)
-        yield methodMap[method].negotiate(self)
-        data = struct.pack('!BBB', c.VER_SOCKS5, c.CMD_CONNECT, c.RSV)
-        port = struct.pack('!H', self.factory.port)
-        self.transport.write(data + socks_host(self.factory.host) + port)
-        status, address_type = yield self.unpack('!xBxB')
-        if status != c.SOCKS5_GRANTED:
-            raise e.ConnectionError('connection rejected by SOCKS server',
-                                    status,
-                                    e.socks5ErrorMap.get(status, status))
+                req + \
+                    message.hostToSOCKSAddress() + \
+                        shortToBytes(self.factory.port)
+        )
+        self._state = 'ServerReply'
 
-        # Discard the host and port data from the server.
-        if address_type == c.ATYP_IPV4:
-            yield self.read(4)
-        elif address_type == c.ATYP_DOMAINNAME:
-            host_length, = yield self.unpack('!B')
-            yield self.read(host_length)
-        elif address_type == c.ATYP_IPV6:
-            yield self.read(16)
-        yield self.read(2)
+    def readServerVersionMethod(self, message):
+        ver, method = message.serverVersionMethod()
+        if method not in self.factory.authMethods:
+            raise e.MethodsNotAcceptedError(
+                    'no method proprosed was accepted',
+                        self.factory.authMethods, method)
+        else:
+            auth_method = method()
+            d = defer.maybeDeferred(auth_method.negotiate, self)
+            d.addCallback(self.writeRequest)
 
-        self.setMode(MODE_RAW)
+    def readServerReply(self, message):
+        status, address, port = message.serverReply()
+        if status != 0:
+            raise status
         self.factory.proxyConnectionEstablished(self)
+
+    def dataReceived(self, data):
+        # XXX-Security audit makeGrammar
+        message = SOCKSGrammar(data)
+
+        current_state_method = getattr(self, 'read' + self._state)
+        d = defer.maybeDeferred(current_state_method,
+                    message)
+        d.addErrback(self.factory.proxyConnectionFailed)
 
     def proxyEstablished(self, other):
         self.otherProtocol = other
-        other.makeConnection(Socks5ClientTransport(self))
+        other.makeConnection(SOCKS5ClientTransport(self))
 
     def rawDataReceived(self, data):
         # There really is no reason for this to get called; we shouldn't be in
@@ -81,8 +104,8 @@ class Socks5Client(MultiBufferer):
             self.factory.proxyConnectionFailed(
                 failure.Failure(e.ConnectionLostEarly()))
 
-class Socks5ClientFactory(protocol.ClientFactory):
-    protocol = Socks5Client
+class SOCKS5ClientFactory(protocol.ClientFactory):
+    protocol = SOCKS5Client
 
     def __init__(self, host, port, proxiedFactory, authMethods):
         self.host = host
@@ -104,17 +127,17 @@ class Socks5ClientFactory(protocol.ClientFactory):
         proxyProtocol.proxyEstablished(proto)
         self.deferred.callback(proto)
 
-class Socks5ClientEndpoint(object):
+class SOCKS5ClientEndpoint(object):
     implements(interfaces.IStreamClientEndpoint)
 
-    def __init__(self, host, port, proxyEndpoint, authMethods=(auth.Anonymous(),)):
+    def __init__(self, host, port, proxyEndpoint, authMethods=(auth.Anonymous,)):
         self.host = host
         self.port = port
         self.proxyEndpoint = proxyEndpoint
         self.authMethods = authMethods
 
     def connect(self, fac):
-        proxyFac = Socks5ClientFactory(self.host, self.port, fac, self.authMethods)
+        proxyFac = SOCKS5ClientFactory(self.host, self.port, fac, self.authMethods)
         self.proxyEndpoint.connect(proxyFac)
         # XXX: maybe use the deferred returned here? need to more different
         # ways/times a connection can fail before connectionMade is called.
