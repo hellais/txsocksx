@@ -107,6 +107,6 @@ SOCKSGrammar = parsley.makeGrammar(socks_grammar,
 
 # XXX how do I do the equivalent of the above and generate the grammar to a
 # file?
-#parsley.moduleFromGrammar(socks_grammar, 'SOCKSGrammar', 
-#        object, {"e": error, "a": auth})
+# parsley.moduleFromGrammar(socks_grammar, 'SOCKSGrammar',
+#         object, {"e": error, "a": auth})
 
