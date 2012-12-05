@@ -26,7 +26,7 @@ class SOCKS5Client(protocol.Protocol):
     implements(interfaces.ITransport)
 
     otherProtocol = None
-    debug = True
+    debug = False
 
     def __init__(self):
         self._state = 'ServerVersionMethod'
@@ -116,6 +116,7 @@ class SOCKS5Client(protocol.Protocol):
             self.log("Connection Lost with no protocol")
             self.factory.proxyConnectionFailed(
                 failure.Failure(e.ConnectionLostEarly()))
+
     def log(self, msg):
         if self.debug:
             print msg
