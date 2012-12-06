@@ -1,15 +1,19 @@
 import struct
 
-from twisted.internet import protocol, defer, interfaces
-from twisted.python import failure
+
 from zope.interface import implements
 
-from txsocksx import constants as c
-import txsocksx.errors as e
+from twisted.internet import interfaces
+from twisted.internet import protocol
+from twisted.internet import defer
+from twisted.python import failure
 
-from txsocksx import auth
+from ometa.runtime import ParseError
 
 from txsocksx.parser import SOCKSGrammar
+from txsocksx import constants as c
+from txsocksx import errors as e
+from txsocksx import auth
 
 def shortToBytes(i):
     return chr(i >> 8) + chr(i & 0xff)
@@ -65,8 +69,17 @@ class SOCKS5Client(protocol.Protocol):
         self._state = 'ServerReply'
 
     def readServerVersionMethod(self, message):
+        """
+        This reads the server version method message.
+        Such message will contains the supported SOCKS version of the server
+        and the method selected by the server.
+        """
         self.log("readServerVersionMethod")
-        ver, method = message.serverVersionMethod()
+        try:
+            ver, method = message.serverVersionMethod()
+        except ParseError:
+            raise e.InvalidServerVersion()
+
         if method not in self.factory.authMethods:
             raise e.MethodsNotAcceptedError(
                     'no method proprosed was accepted',
@@ -77,7 +90,11 @@ class SOCKS5Client(protocol.Protocol):
             d.addCallback(self.writeRequest)
 
     def readServerReply(self, message):
-        status, address, port = message.serverReply()
+        try:
+            status, address, port = message.serverReply()
+        except ParseError:
+            raise e.InvalidServerReply()
+
         self.log("readServerReply %s %s %s" % (status, address, port))
         if status != 0:
             raise status
@@ -102,7 +119,10 @@ class SOCKS5Client(protocol.Protocol):
 
         current_state_method = getattr(self, 'read' + self._state)
         d = defer.maybeDeferred(current_state_method,
-                    message)
+                message)
+        @d.addErrback
+        def _errback(reason):
+            self.factory.proxyConnectionFailed(reason)
 
     def proxyEstablished(self, other):
         self.otherProtocol = other
@@ -135,7 +155,6 @@ class SOCKS5ClientFactory(protocol.ClientFactory):
         self.deferred.errback(reason)
 
     def clientConnectionFailed(self, connector, reason):
-        print "Failed because of %s" % reason
         self.proxyConnectionFailed(reason)
 
     def proxyConnectionEstablished(self, proxyProtocol):
@@ -156,7 +175,8 @@ class SOCKS5ClientEndpoint(object):
 
     def connect(self, fac):
         proxyFac = SOCKS5ClientFactory(self.host, self.port, fac, self.authMethods)
-        self.proxyEndpoint.connect(proxyFac)
-        # XXX: maybe use the deferred returned here? need to more different
-        # ways/times a connection can fail before connectionMade is called.
+        d = self.proxyEndpoint.connect(proxyFac)
+        @d.addErrback
+        def _err(reason):
+            proxyFac.deferred.errback(reason)
         return proxyFac.deferred

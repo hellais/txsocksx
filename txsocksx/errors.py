@@ -4,6 +4,12 @@ import txsocksx.constants as c
 class ParsingError(Exception):
     pass
 
+class InvalidServerVersion(Exception):
+    pass
+
+class InvalidServerReply(Exception):
+    pass
+
 class SOCKSError(Exception):
     pass
 

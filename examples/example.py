@@ -32,6 +32,7 @@ SOCKSPoint = SOCKS5ClientEndpoint(dst_addr,
 d = SOCKSPoint.connect(GETSlashFactory())
 @d.addErrback
 def _gotError(error):
+    print error
     print "Error in connection"
     reactor.stop()
 
