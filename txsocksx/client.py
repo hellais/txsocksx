@@ -32,6 +32,17 @@ class SOCKS5Client(protocol.Protocol):
     otherProtocol = None
     debug = False
 
+    # We use this internal variable to make sure that we do not fire the
+    # deferred errback twice when an exception is raised while parsing a
+    # response from the server.
+    #
+    # This happens when in dataReceived the errback is trigged and the
+    # connection is then lost. The result is that
+    # self.factory.proxyConnectionFailed is called twice and that leads to it's
+    # errback getting fired twice.
+    # XXX this is not as clean as I would like it.
+    _parseError = False
+
     def __init__(self):
         self._state = 'ServerVersionMethod'
 
@@ -122,17 +133,21 @@ class SOCKS5Client(protocol.Protocol):
                 message)
         @d.addErrback
         def _errback(reason):
+            self._parseError = True
             self.factory.proxyConnectionFailed(reason)
+            return
 
     def proxyEstablished(self, other):
         self.otherProtocol = other
         other.makeConnection(SOCKS5ClientTransport(self))
 
     def connectionLost(self, reason):
+        print "ConnectioLost"
+        print reason
         if self.otherProtocol:
             self.log("Connection Lost with other protocol")
             self.otherProtocol.connectionLost(reason)
-        else:
+        elif not self._parseError:
             self.log("Connection Lost with no protocol")
             self.factory.proxyConnectionFailed(
                 failure.Failure(e.ConnectionLostEarly()))
