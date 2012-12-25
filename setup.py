@@ -1,6 +1,7 @@
 #!/usr/bin/env python
-from distutils.core import setup
+from setuptools import setup
 setup(name='txsocksx',
-      version='0.1',
-      packages=['txsocksx']
+    version='0.0.1',
+    packages=['txsocksx'],
+    install_requires=open('requirements.txt').readlines()
 )
