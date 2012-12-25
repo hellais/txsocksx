@@ -142,8 +142,6 @@ class SOCKS5Client(protocol.Protocol):
         other.makeConnection(SOCKS5ClientTransport(self))
 
     def connectionLost(self, reason):
-        print "ConnectioLost"
-        print reason
         if self.otherProtocol:
             self.log("Connection Lost with other protocol")
             self.otherProtocol.connectionLost(reason)
