@@ -1,2 +1,0 @@
-parsley
-Twisted>=12.0
